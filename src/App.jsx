@@ -1,624 +1,556 @@
-
-import { useEffect, useMemo, useState } from "react";
-import api from "./api";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { storageService } from "./services/storageService";
+import Sidebar from "./components/Sidebar";
+import Navbar from "./components/Navbar";
+import StatsCards from "./components/StatsCards";
+import ContactCard from "./components/ContactCard";
+import ContactTable from "./components/ContactTable";
+import ContactModal from "./components/ContactModal";
+import ContactDetailModal from "./components/ContactDetailModal";
+import ImportExportModal from "./components/ImportExportModal";
+import AuthPage from "./components/AuthPage";
+import Toast from "./components/Toast";
+import { PlusIcon, TrashIcon, DownloadIcon, SparklesIcon } from "./components/Icons";
 import "./App.css";
 
-const emptyContact = {
-  name: "",
-  email: "",
-  phone: "",
-  address: "",
-  notes: "",
-};
-
-function App() {
-  const [user, setUser] = useState(() => {
-    try {
-      return JSON.parse(sessionStorage.getItem("contacthubUser")) || null;
-    } catch {
-      return null;
-    }
-  });
-
-  const [mode, setMode] = useState("login");
-  const [auth, setAuth] = useState({
-    name: "",
-    email: "",
-    password: "",
-    confirmPassword: "",
-  });
-
+export default function App() {
+  const [theme, setTheme] = useState(() => storageService.getTheme());
+  const [user, setUser] = useState(() => storageService.getActiveUser());
   const [contacts, setContacts] = useState([]);
-  const [search, setSearch] = useState("");
-  const [form, setForm] = useState(emptyContact);
-  const [editingId, setEditingId] = useState(null);
-  const [showForm, setShowForm] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState(false);
+  const [activeCategory, setActiveCategory] = useState("all");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortBy, setSortBy] = useState("name-asc");
+  const [viewMode, setViewMode] = useState("grid");
+  const [selectedIds, setSelectedIds] = useState([]);
 
-  function notify(text, isError = false) {
-    setMessage(text);
-    setError(isError);
-  }
+  // Modals state
+  const [modalType, setModalType] = useState(null); // 'add' | 'edit' | 'detail' | 'backup'
+  const [activeContact, setActiveContact] = useState(null);
 
-  function changeAuth(event) {
-    setAuth({ ...auth, [event.target.name]: event.target.value });
-  }
+  // Toast state
+  const [toast, setToast] = useState(null);
 
-  function changeContact(event) {
-    setForm({ ...form, [event.target.name]: event.target.value });
-  }
-
-  async function submitAuth(event) {
-    event.preventDefault();
-    setMessage("");
-
-    if (!auth.email.trim() || !auth.password) {
-      notify("Enter your email and password.", true);
-      return;
-    }
-
-    if (mode === "signup") {
-      if (!auth.name.trim()) {
-        notify("Enter your name.", true);
-        return;
-      }
-      if (auth.password.length < 6) {
-        notify("Password must contain at least 6 characters.", true);
-        return;
-      }
-      if (auth.password !== auth.confirmPassword) {
-        notify("Passwords do not match.", true);
-        return;
-      }
-    }
-
-    setBusy(true);
-    try {
-      const endpoint = mode === "signup"
-        ? "/api/v1/register"
-        : "/api/v1/login";
-
-      const payload = mode === "signup"
-        ? {
-            name: auth.name.trim(),
-            email: auth.email.trim().toLowerCase(),
-            password: auth.password,
-          }
-        : {
-            email: auth.email.trim().toLowerCase(),
-            password: auth.password,
-          };
-
-      const response = await api.post(endpoint, payload);
-      const result = typeof response.data === "string"
-        ? response.data
-        : response.data?.message || "";
-
-      if (/invalid|failed|error|already exists/i.test(result)) {
-        notify(result || "Unable to continue.", true);
-        return;
-      }
-
-      if (mode === "signup") {
-        notify("Account created. Please log in.");
-        setMode("login");
-        setAuth({
-          name: "",
-          email: auth.email.trim().toLowerCase(),
-          password: "",
-          confirmPassword: "",
-        });
-      } else {
-        const loggedInUser = {
-          email: auth.email.trim().toLowerCase(),
-          name: auth.email.trim().split("@")[0],
-        };
-
-        sessionStorage.setItem(
-          "contacthubUser",
-          JSON.stringify(loggedInUser)
-        );
-        setUser(loggedInUser);
-        notify("");
-      }
-    } catch (err) {
-      notify(
-        err.response?.data?.message ||
-          (typeof err.response?.data === "string"
-            ? err.response.data
-            : "Could not connect to the server. Check that Spring Boot is running."),
-        true
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function loadContacts() {
-    if (!user?.email) return;
-
-    try {
-      const response = await api.get("/api/contacts", {
-        params: { ownerEmail: user.email },
-      });
-      setContacts(response.data);
-    } catch {
-      notify("Unable to load contacts. Check your backend.", true);
-    }
-  }
-
+  // Initialize theme
   useEffect(() => {
-    if (user?.email) loadContacts();
+    storageService.setTheme(theme);
+  }, [theme]);
+
+  // Load contacts whenever active user changes
+  useEffect(() => {
+    if (user?.email) {
+      const userContacts = storageService.getContacts(user.email);
+      setContacts(userContacts);
+      setSelectedIds([]);
+    } else {
+      setContacts([]);
+      setSelectedIds([]);
+    }
   }, [user?.email]);
 
-  const visibleContacts = useMemo(() => {
-    const query = search.toLowerCase().trim();
-    return contacts.filter((contact) =>
-      [
-        contact.name,
-        contact.email,
-        contact.phone,
-        contact.address,
-      ].some((value) => (value || "").toLowerCase().includes(query))
-    );
-  }, [contacts, search]);
+  const showToast = useCallback((message, type = "success", undoAction = null) => {
+    setToast({ message, type, undoAction, duration: undoAction ? 6000 : 3500 });
+  }, []);
 
-  function openAddForm() {
-    setEditingId(null);
-    setForm(emptyContact);
-    setShowForm(true);
-    notify("");
+  function handleToggleTheme() {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    storageService.setTheme(nextTheme);
   }
 
-  function openEditForm(contact) {
-    setEditingId(contact.id);
-    setForm({
-      name: contact.name || "",
-      email: contact.email || "",
-      phone: contact.phone || "",
-      address: contact.address || "",
-      notes: contact.notes || "",
-    });
-    setShowForm(true);
-    notify("");
+  // Auth Handlers
+  function handleLogin(credentials) {
+    const loggedIn = storageService.loginUser(credentials);
+    setUser(loggedIn);
+    showToast(`Welcome back, ${loggedIn.name}!`);
   }
 
-  async function saveContact(event) {
-    event.preventDefault();
-
-    if (!form.name.trim()) {
-      notify("Contact name is required.", true);
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const config = {
-        params: { ownerEmail: user.email },
-      };
-
-      if (editingId !== null) {
-        await api.put(`/api/contacts/${editingId}`, form, config);
-        notify("Contact updated successfully.");
-      } else {
-        await api.post("/api/contacts", form, config);
-        notify("Contact added successfully.");
-      }
-
-      setShowForm(false);
-      setForm(emptyContact);
-      setEditingId(null);
-      await loadContacts();
-    } catch (err) {
-      notify(
-        err.response?.data?.message || "Could not save this contact.",
-        true
-      );
-    } finally {
-      setBusy(false);
-    }
+  function handleRegister(data) {
+    const newUser = storageService.registerUser(data);
+    setUser(newUser);
+    showToast(`Account created! Welcome to ContactHub.`);
   }
 
-  async function deleteContact(id) {
-    if (!window.confirm("Are you sure you want to delete this contact?")) {
-      return;
-    }
-
-    try {
-      await api.delete(`/api/contacts/${id}`, {
-        params: { ownerEmail: user.email },
-      });
-      setContacts((current) => current.filter((c) => c.id !== id));
-      notify("Contact deleted successfully.");
-    } catch {
-      notify("Unable to delete this contact.", true);
-    }
+  function handleGuestLogin() {
+    const guest = storageService.loginAsGuest();
+    setUser(guest);
+    showToast(`Exploring in Demo Mode. Enjoy ContactHub!`, "info");
   }
 
-  function logout() {
-    sessionStorage.removeItem("contacthubUser");
+  function handleLogout() {
+    storageService.logoutUser();
     setUser(null);
     setContacts([]);
-    setSearch("");
-    setShowForm(false);
-    setMessage("");
-    setAuth({
-      name: "",
-      email: "",
-      password: "",
-      confirmPassword: "",
-    });
-    setMode("login");
+    setSelectedIds([]);
+    showToast("Signed out successfully.", "info");
   }
 
+  // Filtered and Sorted Contacts
+  const filteredContacts = useMemo(() => {
+    let result = [...contacts];
+
+    // Filter by category
+    if (activeCategory === "favorites") {
+      result = result.filter((c) => c.isFavorite);
+    } else if (activeCategory !== "all") {
+      result = result.filter(
+        (c) => (c.category || "").toLowerCase() === activeCategory.toLowerCase()
+      );
+    }
+
+    // Filter by search query
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase().trim();
+      result = result.filter((c) =>
+        [
+          c.name,
+          c.email,
+          c.phone,
+          c.company,
+          c.jobTitle,
+          c.address,
+          c.notes,
+          ...(Array.isArray(c.tags) ? c.tags : []),
+        ].some((val) => (val || "").toLowerCase().includes(q))
+      );
+    }
+
+    // Sort contacts
+    result.sort((a, b) => {
+      if (sortBy === "name-asc") {
+        return (a.name || "").localeCompare(b.name || "");
+      }
+      if (sortBy === "name-desc") {
+        return (b.name || "").localeCompare(a.name || "");
+      }
+      if (sortBy === "newest") {
+        return (
+          new Date(b.updatedAt || b.createdAt || 0) -
+          new Date(a.updatedAt || a.createdAt || 0)
+        );
+      }
+      if (sortBy === "company") {
+        return (a.company || "zzz").localeCompare(b.company || "zzz");
+      }
+      return 0;
+    });
+
+    return result;
+  }, [contacts, activeCategory, searchTerm, sortBy]);
+
+  // Contact CRUD Handlers
+  function handleSaveContact(formData) {
+    try {
+      if (activeContact?.id) {
+        // Edit existing
+        const updated = storageService.updateContact(
+          activeContact.id,
+          formData,
+          user.email
+        );
+        setContacts((prev) =>
+          prev.map((c) => (c.id === updated.id ? updated : c))
+        );
+        showToast(`Updated contact for "${updated.name}".`);
+      } else {
+        // Create new
+        const created = storageService.createContact(formData, user.email);
+        setContacts((prev) => [created, ...prev]);
+        showToast(`Added "${created.name}" to your contacts.`);
+      }
+      setModalType(null);
+      setActiveContact(null);
+    } catch (err) {
+      showToast(err.message || "Failed to save contact.", "error");
+    }
+  }
+
+  function handleDeleteContact(id) {
+    const contactToDelete = contacts.find((c) => c.id === id);
+    if (!contactToDelete) return;
+
+    storageService.deleteContact(id, user.email);
+    setContacts((prev) => prev.filter((c) => c.id !== id));
+    setSelectedIds((prev) => prev.filter((item) => item !== id));
+
+    showToast(
+      `Deleted "${contactToDelete.name}".`,
+      "delete",
+      {
+        type: "RESTORE_CONTACT",
+        contact: contactToDelete,
+      }
+    );
+  }
+
+  function handleBatchDelete() {
+    if (selectedIds.length === 0) return;
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ${selectedIds.length} contact(s)?`
+      )
+    ) {
+      return;
+    }
+
+    const backupList = contacts.filter((c) => selectedIds.includes(c.id));
+    storageService.batchDeleteContacts(selectedIds, user.email);
+    setContacts((prev) => prev.filter((c) => !selectedIds.includes(c.id)));
+    setSelectedIds([]);
+
+    showToast(
+      `Deleted ${backupList.length} contact(s).`,
+      "delete",
+      {
+        type: "RESTORE_BATCH",
+        contacts: backupList,
+      }
+    );
+  }
+
+  function handleUndoAction(action) {
+    if (!action) return;
+    if (action.type === "RESTORE_CONTACT" && action.contact) {
+      const restored = storageService.createContact(action.contact, user.email);
+      setContacts((prev) => [restored, ...prev]);
+      showToast(`Restored "${restored.name}".`);
+    } else if (action.type === "RESTORE_BATCH" && action.contacts) {
+      storageService.importContacts(action.contacts, user.email);
+      const reloaded = storageService.getContacts(user.email);
+      setContacts(reloaded);
+      showToast(`Restored ${action.contacts.length} contacts.`);
+    }
+  }
+
+  function handleToggleFavorite(id) {
+    const updated = storageService.toggleFavorite(id, user.email);
+    if (updated) {
+      setContacts((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, isFavorite: updated.isFavorite } : c))
+      );
+    }
+  }
+
+  function handleResetSampleContacts() {
+    const resetList = storageService.resetContactsToSample(user.email);
+    setContacts(resetList);
+    setSelectedIds([]);
+    showToast("Restored demo sample contacts.", "info");
+  }
+
+  function handleContactsImported() {
+    const reloaded = storageService.getContacts(user.email);
+    setContacts(reloaded);
+    showToast("Contacts imported successfully!");
+  }
+
+  // Selection handlers
+  function handleToggleSelect(id) {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  }
+
+  function handleSelectAll() {
+    if (selectedIds.length === filteredContacts.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(filteredContacts.map((c) => c.id));
+    }
+  }
+
+  function handleExportSelectedCSV() {
+    const selectedContacts = contacts.filter((c) => selectedIds.includes(c.id));
+    if (selectedContacts.length === 0) return;
+
+    const headers = ["Name", "Email", "Phone", "Company", "Job Title", "Category", "Address", "Notes"];
+    const rows = selectedContacts.map((c) => [
+      `"${(c.name || "").replace(/"/g, '""')}"`,
+      `"${(c.email || "").replace(/"/g, '""')}"`,
+      `"${(c.phone || "").replace(/"/g, '""')}"`,
+      `"${(c.company || "").replace(/"/g, '""')}"`,
+      `"${(c.jobTitle || "").replace(/"/g, '""')}"`,
+      `"${(c.category || "Work").replace(/"/g, '""')}"`,
+      `"${(c.address || "").replace(/"/g, '""')}"`,
+      `"${(c.notes || "").replace(/"/g, '""')}"`,
+    ]);
+
+    const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `selected_contacts_${selectedIds.length}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${selectedIds.length} contact(s) to CSV.`);
+  }
+
+  // If no user is logged in, show Auth Page
   if (!user) {
     return (
-      <main className="auth-page">
-        <section className="auth-card">
-          <div className="brand-mark">C</div>
-          <div className="brand-name">ContactHub <span>↗</span></div>
-          <h1>{mode === "login" ? "Welcome back!" : "Create your account"}</h1>
-          <p className="muted">
-            {mode === "login"
-              ? "Enter your details to access your account."
-              : "Join ContactHub to organize your contacts."}
-          </p>
-
-          <div className="auth-tabs">
-            <button
-              className={mode === "login" ? "active" : ""}
-              onClick={() => { setMode("login"); notify(""); }}
-              type="button"
-            >
-              Login
-            </button>
-            <button
-              className={mode === "signup" ? "active" : ""}
-              onClick={() => { setMode("signup"); notify(""); }}
-              type="button"
-            >
-              Sign Up
-            </button>
-          </div>
-
-          <form onSubmit={submitAuth} className="auth-form">
-            {mode === "signup" && (
-              <label>
-                Full name
-                <input
-                  name="name"
-                  value={auth.name}
-                  onChange={changeAuth}
-                  placeholder="Your name"
-                  autoComplete="name"
-                  required
-                />
-              </label>
-            )}
-
-            <label>
-              Email address
-              <input
-                type="email"
-                name="email"
-                value={auth.email}
-                onChange={changeAuth}
-                placeholder="you@example.com"
-                autoComplete="email"
-                required
-              />
-            </label>
-
-            <label>
-              Password
-              <input
-                type="password"
-                name="password"
-                value={auth.password}
-                onChange={changeAuth}
-                placeholder="Enter your password"
-                autoComplete={mode === "login" ? "current-password" : "new-password"}
-                required
-              />
-            </label>
-
-            {mode === "signup" && (
-              <label>
-                Confirm password
-                <input
-                  type="password"
-                  name="confirmPassword"
-                  value={auth.confirmPassword}
-                  onChange={changeAuth}
-                  placeholder="Re-enter your password"
-                  autoComplete="new-password"
-                  required
-                />
-              </label>
-            )}
-
-            {message && (
-              <p className={error ? "notice error" : "notice success"}>
-                {message}
-              </p>
-            )}
-
-            <button className="primary-button" disabled={busy}>
-              {busy
-                ? "Please wait..."
-                : mode === "login"
-                  ? "Login to ContactHub →"
-                  : "Create account →"}
-            </button>
-          </form>
-
-          <p className="auth-switch">
-            {mode === "login" ? "Don't have an account?" : "Already registered?"}
-            {" "}
-            <button
-              type="button"
-              onClick={() => {
-                setMode(mode === "login" ? "signup" : "login");
-                notify("");
-              }}
-            >
-              {mode === "login" ? "Sign up" : "Login"}
-            </button>
-          </p>
-
-          <p className="footnote">
-            By continuing, you agree to use ContactHub responsibly.
-          </p>
-        </section>
-      </main>
+      <AuthPage
+        onLogin={handleLogin}
+        onRegister={handleRegister}
+        onGuestLogin={handleGuestLogin}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+      />
     );
   }
 
   return (
-    <main className="dashboard">
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <div className="brand-mark small">C</div>
-          <span>ContactHub</span>
-        </div>
+    <div className="app-layout">
+      <Sidebar
+        user={user}
+        contacts={contacts}
+        activeCategory={activeCategory}
+        onSelectCategory={(catId) => {
+          setActiveCategory(catId);
+          setSelectedIds([]);
+        }}
+        onOpenAddModal={() => {
+          setActiveContact(null);
+          setModalType("add");
+        }}
+        onOpenBackupModal={() => setModalType("backup")}
+        onLogout={handleLogout}
+        theme={theme}
+        onToggleTheme={handleToggleTheme}
+      />
 
-        <p className="nav-heading">WORKSPACE</p>
-        <button className="nav-item selected" type="button">
-          <span>▦</span> Dashboard
-        </button>
-        <button
-          className="nav-item"
-          type="button"
-          onClick={openAddForm}
-        >
-          <span>＋</span> Add contact
-        </button>
+      <main className="dashboard-main">
+        <Navbar
+          searchTerm={searchTerm}
+          onSearchChange={setSearchTerm}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          sortBy={sortBy}
+          onSortByChange={setSortBy}
+          onOpenAddModal={() => {
+            setActiveContact(null);
+            setModalType("add");
+          }}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+        />
 
-        <div className="sidebar-bottom">
-          <div className="profile-circle">
-            {(user.name || user.email).charAt(0).toUpperCase()}
-          </div>
-          <div className="profile-info">
-            <strong>{user.name}</strong>
-            <span>{user.email}</span>
-          </div>
-          <button className="logout-button" onClick={logout} type="button">
-            ↪
-          </button>
-        </div>
-      </aside>
-
-      <section className="dashboard-main">
-        <header className="topbar">
-          <div>
-            <span className="eyebrow">YOUR WORKSPACE</span>
-            <h1>Contacts dashboard</h1>
-            <p className="muted">All your important people, in one place.</p>
-          </div>
-          <button className="outline-button" onClick={logout} type="button">
-            Log out
-          </button>
-        </header>
-
-        {message && (
-          <p className={error ? "notice error" : "notice success"}>
-            {message}
-          </p>
-        )}
-
-        <section className="welcome-banner">
-          <div>
-            <p className="eyebrow">WELCOME TO CONTACTHUB</p>
-            <h2>Stay connected, {user.name}.</h2>
-            <p>Organize your contacts and find the right person in seconds.</p>
-          </div>
-          <div className="banner-icon">✳</div>
-        </section>
-
-        <section className="stats-grid">
-          <article className="stat-card">
-            <span className="stat-icon">♙</span>
-            <p>Total contacts</p>
-            <strong>{contacts.length}</strong>
-            <span className="stat-caption">Saved in your workspace</span>
-          </article>
-          <article className="stat-card">
-            <span className="stat-icon">⌕</span>
-            <p>Search results</p>
-            <strong>{visibleContacts.length}</strong>
-            <span className="stat-caption">Matching your search</span>
-          </article>
-          <article className="stat-card">
-            <span className="stat-icon">✓</span>
-            <p>Workspace status</p>
-            <strong className="online-status">Active</strong>
-            <span className="stat-caption">Ready to manage contacts</span>
-          </article>
-        </section>
-
-        <section className="contacts-section">
-          <div className="section-heading">
+        {/* Welcome & Stats */}
+        <div className="dashboard-content">
+          <section className="welcome-banner">
             <div>
-              <h2>Your contacts</h2>
-              <p className="muted">Add, search, update, or remove contacts.</p>
-            </div>
-            <button className="primary-button add-button" onClick={openAddForm}>
-              + Add contact
-            </button>
-          </div>
-
-          <div className="search-box">
-            <span>⌕</span>
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by name, email, phone, or address..."
-              aria-label="Search contacts"
-            />
-          </div>
-
-          {showForm && (
-            <form className="contact-form" onSubmit={saveContact}>
-              <div className="form-heading">
-                <h3>{editingId !== null ? "Edit contact" : "Add a new contact"}</h3>
-                <button
-                  type="button"
-                  className="close-button"
-                  onClick={() => setShowForm(false)}
-                >
-                  ×
-                </button>
-              </div>
-
-              <div className="form-grid">
-                <label>
-                  Full name *
-                  <input
-                    name="name"
-                    value={form.name}
-                    onChange={changeContact}
-                    placeholder="Contact name"
-                    required
-                  />
-                </label>
-                <label>
-                  Email address
-                  <input
-                    type="email"
-                    name="email"
-                    value={form.email}
-                    onChange={changeContact}
-                    placeholder="person@example.com"
-                  />
-                </label>
-                <label>
-                  Phone number
-                  <input
-                    name="phone"
-                    value={form.phone}
-                    onChange={changeContact}
-                    placeholder="Phone number"
-                  />
-                </label>
-                <label>
-                  Address
-                  <input
-                    name="address"
-                    value={form.address}
-                    onChange={changeContact}
-                    placeholder="City or address"
-                  />
-                </label>
-                <label className="full-width">
-                  Notes
-                  <textarea
-                    name="notes"
-                    value={form.notes}
-                    onChange={changeContact}
-                    placeholder="Additional details..."
-                    rows="3"
-                  />
-                </label>
-              </div>
-
-              <div className="form-actions">
-                <button
-                  className="outline-button"
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                >
-                  Cancel
-                </button>
-                <button className="primary-button" disabled={busy}>
-                  {busy ? "Saving..." : editingId !== null ? "Save changes" : "Save contact"}
-                </button>
-              </div>
-            </form>
-          )}
-
-          {visibleContacts.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">♧</div>
-              <h3>{search ? "No matching contacts" : "Your contact list is empty"}</h3>
+              <p className="eyebrow">CONTACTHUB • ALL-IN-ONE JAVASCRIPT APP</p>
+              <h2>Stay connected, {user.name}.</h2>
               <p>
-                {search
-                  ? "Try another name, email, phone number, or address."
-                  : "Add your first contact to start building your address book."}
+                Manage your network seamlessly with instant offline local storage. No external servers or database setup required.
               </p>
-              {!search && (
-                <button className="primary-button" onClick={openAddForm}>
-                  + Add your first contact
+            </div>
+            <div className="banner-icon">
+              <SparklesIcon size={38} />
+            </div>
+          </section>
+
+          <StatsCards contacts={contacts} />
+
+          {/* Section Toolbar / Heading */}
+          <section className="contacts-section">
+            <div className="section-heading">
+              <div className="section-title-wrap">
+                <h2>
+                  {activeCategory === "all"
+                    ? "All Contacts"
+                    : activeCategory === "favorites"
+                    ? "Starred Favorites"
+                    : `${activeCategory} Contacts`}
+                </h2>
+                <p className="muted">
+                  Showing {filteredContacts.length} of {contacts.length} total contacts
+                </p>
+              </div>
+
+              <div className="section-heading-actions">
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={() => setModalType("backup")}
+                >
+                  <DownloadIcon size={14} />
+                  <span>Import / Export</span>
                 </button>
-              )}
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setActiveContact(null);
+                    setModalType("add");
+                  }}
+                >
+                  <PlusIcon size={14} />
+                  <span>New Contact</span>
+                </button>
+              </div>
             </div>
-          ) : (
-            <div className="contact-list">
-              {visibleContacts.map((contact) => (
-                <article className="contact-card" key={contact.id}>
-                  <div className="contact-avatar">
-                    {(contact.name || "?").charAt(0).toUpperCase()}
-                  </div>
-                  <div className="contact-details">
-                    <h3>{contact.name}</h3>
-                    <p>{contact.email || "No email added"}</p>
-                    <div className="contact-meta">
-                      {contact.phone && <span>☎ {contact.phone}</span>}
-                      {contact.address && <span>⌖ {contact.address}</span>}
-                    </div>
-                    {contact.notes && <p className="contact-notes">{contact.notes}</p>}
-                  </div>
-                  <div className="contact-actions">
+
+            {/* Batch actions bar when items are selected */}
+            {selectedIds.length > 0 && (
+              <div className="batch-actions-bar">
+                <div className="batch-info">
+                  <span className="batch-badge">{selectedIds.length}</span>
+                  <span>Contact(s) Selected</span>
+                </div>
+                <div className="batch-buttons">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={handleExportSelectedCSV}
+                  >
+                    <DownloadIcon size={13} />
+                    <span>Export Selected</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-sm"
+                    onClick={handleBatchDelete}
+                  >
+                    <TrashIcon size={13} />
+                    <span>Delete Selected ({selectedIds.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-text-sm"
+                    onClick={() => setSelectedIds([])}
+                  >
+                    Clear Selection
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Contact list or empty state */}
+            {filteredContacts.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon">⌕</div>
+                <h3>
+                  {searchTerm
+                    ? `No contacts match "${searchTerm}"`
+                    : activeCategory === "favorites"
+                    ? "No starred contacts yet"
+                    : "No contacts in this category"}
+                </h3>
+                <p>
+                  {searchTerm
+                    ? "Try adjusting your search terms or clearing filters."
+                    : "Click below to add a new contact or import from a file."}
+                </p>
+                <div className="empty-state-buttons">
+                  {searchTerm && (
                     <button
-                      className="edit-button"
-                      onClick={() => openEditForm(contact)}
                       type="button"
+                      className="btn btn-outline"
+                      onClick={() => setSearchTerm("")}
                     >
-                      Edit
+                      Clear Search
                     </button>
-                    <button
-                      className="delete-button"
-                      onClick={() => deleteContact(contact.id)}
-                      type="button"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      setActiveContact(null);
+                      setModalType("add");
+                    }}
+                  >
+                    <PlusIcon size={14} />
+                    <span>Add New Contact</span>
+                  </button>
+                </div>
+              </div>
+            ) : viewMode === "grid" ? (
+              <div className="contacts-grid">
+                {filteredContacts.map((contact) => (
+                  <ContactCard
+                    key={contact.id}
+                    contact={contact}
+                    onEdit={(c) => {
+                      setActiveContact(c);
+                      setModalType("edit");
+                    }}
+                    onDelete={handleDeleteContact}
+                    onToggleFavorite={handleToggleFavorite}
+                    onSelectDetails={(c) => {
+                      setActiveContact(c);
+                      setModalType("detail");
+                    }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <ContactTable
+                contacts={filteredContacts}
+                selectedIds={selectedIds}
+                onToggleSelect={handleToggleSelect}
+                onSelectAll={handleSelectAll}
+                onEdit={(c) => {
+                  setActiveContact(c);
+                  setModalType("edit");
+                }}
+                onDelete={handleDeleteContact}
+                onToggleFavorite={handleToggleFavorite}
+                onSelectDetails={(c) => {
+                  setActiveContact(c);
+                  setModalType("detail");
+                }}
+              />
+            )}
+          </section>
+        </div>
 
         <footer className="dashboard-footer">
-          ContactHub · Your contacts, thoughtfully organized.
+          ContactHub • High-performance JavaScript Address Book with Offline Local Storage
         </footer>
-      </section>
-    </main>
+      </main>
+
+      {/* Modals */}
+      <ContactModal
+        isOpen={modalType === "add" || modalType === "edit"}
+        initialData={activeContact}
+        onSave={handleSaveContact}
+        onClose={() => {
+          setModalType(null);
+          setActiveContact(null);
+        }}
+      />
+
+      <ContactDetailModal
+        contact={activeContact}
+        onClose={() => {
+          setActiveContact(null);
+          if (modalType === "detail") setModalType(null);
+        }}
+        onEdit={(c) => {
+          setActiveContact(c);
+          setModalType("edit");
+        }}
+        onDelete={handleDeleteContact}
+        onToggleFavorite={handleToggleFavorite}
+      />
+
+      <ImportExportModal
+        isOpen={modalType === "backup"}
+        onClose={() => setModalType(null)}
+        ownerEmail={user.email}
+        contactsCount={contacts.length}
+        onContactsImported={handleContactsImported}
+        onResetSample={handleResetSampleContacts}
+      />
+
+      {/* Floating Toast Notification */}
+      <Toast
+        toast={toast}
+        onClose={() => setToast(null)}
+        onUndo={handleUndoAction}
+      />
+    </div>
   );
 }
-
-export default App;
-
-
