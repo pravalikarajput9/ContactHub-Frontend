@@ -56,32 +56,92 @@ export default function App() {
     setTheme(nextTheme);
     storageService.setTheme(nextTheme);
   }
+  
+  // Auth Handlers - connect to deployed backend
+  const API_URL = "https://contacthub-backend-vg69.onrender.com/api/v1";
 
-  // Auth Handlers
-  function handleLogin(credentials) {
-    const loggedIn = storageService.loginUser(credentials);
-    setUser(loggedIn);
-    showToast(`Welcome back, ${loggedIn.name}!`);
+  async function handleLogin(credentials) {
+    try {
+      const response = await fetch(`${API_URL}/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: credentials.email.trim(),
+          password: credentials.password,
+        }),
+      });
+
+      const result = await response.text();
+
+      if (!response.ok) {
+        throw new Error(result || "Invalid email or password.");
+      }
+
+      const loggedIn = {
+        name: credentials.email.trim().split("@")[0],
+        email: credentials.email.trim(),
+      };
+
+      setUser(loggedIn);
+      showToast("Login successful!");
+    } catch (error) {
+      console.error("Login error:", error);
+
+      if (error instanceof TypeError) {
+        throw new Error(
+          "Unable to connect to the server. Please check your internet connection or try again later."
+        );
+      }
+
+      throw error;
+    }
   }
 
-  function handleRegister(data) {
-    const newUser = storageService.registerUser(data);
-    setUser(newUser);
-    showToast(`Account created! Welcome to ContactHub.`);
+  async function handleRegister(data) {
+    try {
+      const response = await fetch(`${API_URL}/register`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: data.name.trim(),
+          email: data.email.trim(),
+          password: data.password,
+        }),
+      });
+
+      const result = await response.text();
+
+      if (!response.ok) {
+        throw new Error(result || "Registration failed.");
+      }
+
+      setUser({
+        name: data.name.trim(),
+        email: data.email.trim(),
+      });
+
+      showToast("Account created successfully!");
+    } catch (error) {
+      console.error("Registration error:", error);
+
+      if (error instanceof TypeError) {
+        throw new Error(
+          "Unable to connect to the server. Please check your internet connection or try again later."
+        );
+      }
+
+      throw error;
+    }
   }
 
   function handleGuestLogin() {
     const guest = storageService.loginAsGuest();
     setUser(guest);
-    showToast(`Exploring in Demo Mode. Enjoy ContactHub!`, "info");
-  }
-
-  function handleLogout() {
-    storageService.logoutUser();
-    setUser(null);
-    setContacts([]);
-    setSelectedIds([]);
-    showToast("Signed out successfully.", "info");
+    showToast("Exploring in Demo Mode. Enjoy ContactHub!", "info");
   }
 
   // Filtered and Sorted Contacts
