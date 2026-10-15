@@ -1,616 +1,498 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { storageService } from "./services/storageService";
-import Sidebar from "./components/Sidebar";
-import Navbar from "./components/Navbar";
-import StatsCards from "./components/StatsCards";
-import ContactCard from "./components/ContactCard";
-import ContactTable from "./components/ContactTable";
-import ContactModal from "./components/ContactModal";
-import ContactDetailModal from "./components/ContactDetailModal";
-import ImportExportModal from "./components/ImportExportModal";
-import AuthPage from "./components/AuthPage";
-import Toast from "./components/Toast";
-import { PlusIcon, TrashIcon, DownloadIcon, SparklesIcon } from "./components/Icons";
+```jsx
+import { useEffect, useMemo, useState } from "react";
 import "./App.css";
 
+const API_URL =
+  "https://contacthub-backend-production.up.railway.app/api/v1";
+
+const CONTACTS_KEY = "contacthub_contacts";
+
+function readContacts(email) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CONTACTS_KEY) || "{}");
+    return Array.isArray(saved[email]) ? saved[email] : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveContacts(email, contacts) {
+  const saved = JSON.parse(localStorage.getItem(CONTACTS_KEY) || "{}");
+  saved[email] = contacts;
+  localStorage.setItem(CONTACTS_KEY, JSON.stringify(saved));
+}
+
 export default function App() {
-  const [theme, setTheme] = useState(() => storageService.getTheme());
-  const [user, setUser] = useState(() => storageService.getActiveUser());
+  const [mode, setMode] = useState("login");
+  const [user, setUser] = useState(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem("contacthub_user")) || null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
   const [contacts, setContacts] = useState([]);
-  const [activeCategory, setActiveCategory] = useState("all");
-  const [searchTerm, setSearchTerm] = useState("");
-  const [sortBy, setSortBy] = useState("name-asc");
-  const [viewMode, setViewMode] = useState("grid");
-  const [selectedIds, setSelectedIds] = useState([]);
+  const [search, setSearch] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactAddress, setContactAddress] = useState("");
+  const [contactNotes, setContactNotes] = useState("");
 
-  // Modals state
-  const [modalType, setModalType] = useState(null); // 'add' | 'edit' | 'detail' | 'backup'
-  const [activeContact, setActiveContact] = useState(null);
-
-  // Toast state
-  const [toast, setToast] = useState(null);
-
-  // Initialize theme
-  useEffect(() => {
-    storageService.setTheme(theme);
-  }, [theme]);
-
-  // Load contacts whenever active user changes
   useEffect(() => {
     if (user?.email) {
-      const userContacts = storageService.getContacts(user.email);
-      setContacts(userContacts);
-      setSelectedIds([]);
+      setContacts(readContacts(user.email));
     } else {
       setContacts([]);
-      setSelectedIds([]);
     }
   }, [user?.email]);
 
-  const showToast = useCallback((message, type = "success", undoAction = null) => {
-    setToast({ message, type, undoAction, duration: undoAction ? 6000 : 3500 });
-  }, []);
-
-  function handleToggleTheme() {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    storageService.setTheme(nextTheme);
-  }
-  
-  // Auth Handlers - connect to deployed backend
-  const API_URL = "https://contacthub-backend-vg69.onrender.com/api/v1";
-
-  async function handleLogin(credentials) {
-    try {
-      const response = await fetch(`${API_URL}/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: credentials.email.trim(),
-          password: credentials.password,
-        }),
-      });
-
-      const result = await response.text();
-
-      if (!response.ok) {
-        throw new Error(result || "Invalid email or password.");
-      }
-
-      const loggedIn = {
-        name: credentials.email.trim().split("@")[0],
-        email: credentials.email.trim(),
-      };
-
-      setUser(loggedIn);
-      showToast("Login successful!");
-    } catch (error) {
-      console.error("Login error:", error);
-
-      if (error instanceof TypeError) {
-        throw new Error(
-          "Unable to connect to the server. Please check your internet connection or try again later."
-        );
-      }
-
-      throw error;
+  function updateContacts(nextContacts) {
+    setContacts(nextContacts);
+    if (user?.email) {
+      saveContacts(user.email, nextContacts);
     }
   }
 
-  async function handleRegister(data) {
-    try {
-      const response = await fetch(`${API_URL}/register`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          name: data.name.trim(),
-          email: data.email.trim(),
-          password: data.password,
-        }),
-      });
+  async function submitAuth(event) {
+    event.preventDefault();
+    setMessage("");
 
-      const result = await response.text();
+    const cleanEmail = email.trim().toLowerCase();
 
-      if (!response.ok) {
-        throw new Error(result || "Registration failed.");
-      }
-
-      setUser({
-        name: data.name.trim(),
-        email: data.email.trim(),
-      });
-
-      showToast("Account created successfully!");
-    } catch (error) {
-      console.error("Registration error:", error);
-
-      if (error instanceof TypeError) {
-        throw new Error(
-          "Unable to connect to the server. Please check your internet connection or try again later."
-        );
-      }
-
-      throw error;
-    }
-  }
-
-  function handleGuestLogin() {
-    const guest = storageService.loginAsGuest();
-    setUser(guest);
-    showToast("Exploring in Demo Mode. Enjoy ContactHub!", "info");
-  }
-
-  // Filtered and Sorted Contacts
-  const filteredContacts = useMemo(() => {
-    let result = [...contacts];
-
-    // Filter by category
-    if (activeCategory === "favorites") {
-      result = result.filter((c) => c.isFavorite);
-    } else if (activeCategory !== "all") {
-      result = result.filter(
-        (c) => (c.category || "").toLowerCase() === activeCategory.toLowerCase()
-      );
-    }
-
-    // Filter by search query
-    if (searchTerm.trim()) {
-      const q = searchTerm.toLowerCase().trim();
-      result = result.filter((c) =>
-        [
-          c.name,
-          c.email,
-          c.phone,
-          c.company,
-          c.jobTitle,
-          c.address,
-          c.notes,
-          ...(Array.isArray(c.tags) ? c.tags : []),
-        ].some((val) => (val || "").toLowerCase().includes(q))
-      );
-    }
-
-    // Sort contacts
-    result.sort((a, b) => {
-      if (sortBy === "name-asc") {
-        return (a.name || "").localeCompare(b.name || "");
-      }
-      if (sortBy === "name-desc") {
-        return (b.name || "").localeCompare(a.name || "");
-      }
-      if (sortBy === "newest") {
-        return (
-          new Date(b.updatedAt || b.createdAt || 0) -
-          new Date(a.updatedAt || a.createdAt || 0)
-        );
-      }
-      if (sortBy === "company") {
-        return (a.company || "zzz").localeCompare(b.company || "zzz");
-      }
-      return 0;
-    });
-
-    return result;
-  }, [contacts, activeCategory, searchTerm, sortBy]);
-
-  // Contact CRUD Handlers
-  function handleSaveContact(formData) {
-    try {
-      if (activeContact?.id) {
-        // Edit existing
-        const updated = storageService.updateContact(
-          activeContact.id,
-          formData,
-          user.email
-        );
-        setContacts((prev) =>
-          prev.map((c) => (c.id === updated.id ? updated : c))
-        );
-        showToast(`Updated contact for "${updated.name}".`);
-      } else {
-        // Create new
-        const created = storageService.createContact(formData, user.email);
-        setContacts((prev) => [created, ...prev]);
-        showToast(`Added "${created.name}" to your contacts.`);
-      }
-      setModalType(null);
-      setActiveContact(null);
-    } catch (err) {
-      showToast(err.message || "Failed to save contact.", "error");
-    }
-  }
-
-  function handleDeleteContact(id) {
-    const contactToDelete = contacts.find((c) => c.id === id);
-    if (!contactToDelete) return;
-
-    storageService.deleteContact(id, user.email);
-    setContacts((prev) => prev.filter((c) => c.id !== id));
-    setSelectedIds((prev) => prev.filter((item) => item !== id));
-
-    showToast(
-      `Deleted "${contactToDelete.name}".`,
-      "delete",
-      {
-        type: "RESTORE_CONTACT",
-        contact: contactToDelete,
-      }
-    );
-  }
-
-  function handleBatchDelete() {
-    if (selectedIds.length === 0) return;
-    if (
-      !window.confirm(
-        `Are you sure you want to delete ${selectedIds.length} contact(s)?`
-      )
-    ) {
+    if (!cleanEmail || !password.trim()) {
+      setMessage("Please enter your email and password.");
       return;
     }
 
-    const backupList = contacts.filter((c) => selectedIds.includes(c.id));
-    storageService.batchDeleteContacts(selectedIds, user.email);
-    setContacts((prev) => prev.filter((c) => !selectedIds.includes(c.id)));
-    setSelectedIds([]);
+    if (mode === "register" && !name.trim()) {
+      setMessage("Please enter your name.");
+      return;
+    }
 
-    showToast(
-      `Deleted ${backupList.length} contact(s).`,
-      "delete",
-      {
-        type: "RESTORE_BATCH",
-        contacts: backupList,
+    if (mode === "register" && password.length < 6) {
+      setMessage("Password must contain at least 6 characters.");
+      return;
+    }
+
+    setBusy(true);
+
+    try {
+      const endpoint = mode === "register" ? "register" : "login";
+
+      const response = await fetch(`${API_URL}/${endpoint}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...(mode === "register" ? { name: name.trim() } : {}),
+          email: cleanEmail,
+          password,
+        }),
+      });
+
+      const result = await response.text();
+
+      if (!response.ok) {
+        throw new Error(result || `${mode} failed. Please try again.`);
       }
+
+      const account = {
+        name: mode === "register" ? name.trim() : cleanEmail.split("@")[0],
+        email: cleanEmail,
+      };
+
+      sessionStorage.setItem("contacthub_user", JSON.stringify(account));
+      setUser(account);
+      setPassword("");
+      setMessage("");
+    } catch (error) {
+      console.error("Authentication error:", error);
+
+      if (error instanceof TypeError) {
+        setMessage(
+          "Cannot connect to the backend. Check your Railway deployment and browser console."
+        );
+      } else {
+        setMessage(error.message || "Something went wrong.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function logout() {
+    sessionStorage.removeItem("contacthub_user");
+    setUser(null);
+    setName("");
+    setEmail("");
+    setPassword("");
+    setMessage("");
+    setSearch("");
+  }
+
+  function addContact(event) {
+    event.preventDefault();
+
+    if (!contactName.trim() || !contactPhone.trim()) {
+      setMessage("Please enter the contact name and phone number.");
+      return;
+    }
+
+    const newContact = {
+      id: `${Date.now()}-${Math.random()}`,
+      name: contactName.trim(),
+      email: contactEmail.trim(),
+      phone: contactPhone.trim(),
+      address: contactAddress.trim(),
+      notes: contactNotes.trim(),
+    };
+
+    updateContacts([newContact, ...contacts]);
+
+    setContactName("");
+    setContactEmail("");
+    setContactPhone("");
+    setContactAddress("");
+    setContactNotes("");
+    setMessage("Contact added successfully!");
+  }
+
+  function deleteContact(id) {
+    updateContacts(contacts.filter((contact) => contact.id !== id));
+    setMessage("Contact deleted.");
+  }
+
+  const filteredContacts = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return contacts.filter((contact) =>
+      [
+        contact.name,
+        contact.email,
+        contact.phone,
+        contact.address,
+        contact.notes,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query)
     );
-  }
+  }, [contacts, search]);
 
-  function handleUndoAction(action) {
-    if (!action) return;
-    if (action.type === "RESTORE_CONTACT" && action.contact) {
-      const restored = storageService.createContact(action.contact, user.email);
-      setContacts((prev) => [restored, ...prev]);
-      showToast(`Restored "${restored.name}".`);
-    } else if (action.type === "RESTORE_BATCH" && action.contacts) {
-      storageService.importContacts(action.contacts, user.email);
-      const reloaded = storageService.getContacts(user.email);
-      setContacts(reloaded);
-      showToast(`Restored ${action.contacts.length} contacts.`);
-    }
-  }
-
-  function handleToggleFavorite(id) {
-    const updated = storageService.toggleFavorite(id, user.email);
-    if (updated) {
-      setContacts((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, isFavorite: updated.isFavorite } : c))
-      );
-    }
-  }
-
-  function handleResetSampleContacts() {
-    const resetList = storageService.resetContactsToSample(user.email);
-    setContacts(resetList);
-    setSelectedIds([]);
-    showToast("Restored demo sample contacts.", "info");
-  }
-
-  function handleContactsImported() {
-    const reloaded = storageService.getContacts(user.email);
-    setContacts(reloaded);
-    showToast("Contacts imported successfully!");
-  }
-
-  // Selection handlers
-  function handleToggleSelect(id) {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
-    );
-  }
-
-  function handleSelectAll() {
-    if (selectedIds.length === filteredContacts.length) {
-      setSelectedIds([]);
-    } else {
-      setSelectedIds(filteredContacts.map((c) => c.id));
-    }
-  }
-
-  function handleExportSelectedCSV() {
-    const selectedContacts = contacts.filter((c) => selectedIds.includes(c.id));
-    if (selectedContacts.length === 0) return;
-
-    const headers = ["Name", "Email", "Phone", "Company", "Job Title", "Category", "Address", "Notes"];
-    const rows = selectedContacts.map((c) => [
-      `"${(c.name || "").replace(/"/g, '""')}"`,
-      `"${(c.email || "").replace(/"/g, '""')}"`,
-      `"${(c.phone || "").replace(/"/g, '""')}"`,
-      `"${(c.company || "").replace(/"/g, '""')}"`,
-      `"${(c.jobTitle || "").replace(/"/g, '""')}"`,
-      `"${(c.category || "Work").replace(/"/g, '""')}"`,
-      `"${(c.address || "").replace(/"/g, '""')}"`,
-      `"${(c.notes || "").replace(/"/g, '""')}"`,
-    ]);
-
-    const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `selected_contacts_${selectedIds.length}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    showToast(`Exported ${selectedIds.length} contact(s) to CSV.`);
-  }
-
-  // If no user is logged in, show Auth Page
-  if (!user) {
+  if (user) {
     return (
-      <AuthPage
-        onLogin={handleLogin}
-        onRegister={handleRegister}
-        onGuestLogin={handleGuestLogin}
-        theme={theme}
-        onToggleTheme={handleToggleTheme}
-      />
+      <main className="app-shell">
+        <header className="topbar">
+          <a className="brand" href="#home">
+            <span className="brand-icon">C</span>
+            ContactHub
+          </a>
+
+          <div className="user-menu">
+            <span className="user-email">{user.email}</span>
+            <button className="button button-outline" onClick={logout}>
+              Logout
+            </button>
+          </div>
+        </header>
+
+        <section className="dashboard">
+          <div className="welcome">
+            <div>
+              <p className="eyebrow">YOUR PERSONAL CONTACT MANAGER</p>
+              <h1>Welcome, {user.name}!</h1>
+              <p className="muted">
+                Keep your important contacts organized in one place.
+              </p>
+            </div>
+
+            <div className="stat-card">
+              <span className="stat-number">{contacts.length}</span>
+              <span className="muted">Total contacts</span>
+            </div>
+          </div>
+
+          {message && (
+            <div className="notice" role="status">
+              {message}
+              <button
+                className="notice-close"
+                onClick={() => setMessage("")}
+                aria-label="Dismiss message"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          <div className="dashboard-grid">
+            <section className="panel">
+              <h2>Add a contact</h2>
+              <p className="muted">Enter the details below.</p>
+
+              <form onSubmit={addContact} className="contact-form">
+                <label>
+                  Full name *
+                  <input
+                    value={contactName}
+                    onChange={(e) => setContactName(e.target.value)}
+                    placeholder="e.g. Priya Sharma"
+                    required
+                  />
+                </label>
+
+                <label>
+                  Email
+                  <input
+                    type="email"
+                    value={contactEmail}
+                    onChange={(e) => setContactEmail(e.target.value)}
+                    placeholder="name@example.com"
+                  />
+                </label>
+
+                <label>
+                  Phone number *
+                  <input
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    placeholder="Enter phone number"
+                    required
+                  />
+                </label>
+
+                <label>
+                  Address
+                  <input
+                    value={contactAddress}
+                    onChange={(e) => setContactAddress(e.target.value)}
+                    placeholder="City or full address"
+                  />
+                </label>
+
+                <label>
+                  Notes
+                  <textarea
+                    value={contactNotes}
+                    onChange={(e) => setContactNotes(e.target.value)}
+                    placeholder="Additional information"
+                    rows={3}
+                  />
+                </label>
+
+                <button className="button button-primary" type="submit">
+                  + Add contact
+                </button>
+              </form>
+            </section>
+
+            <section className="panel contacts-panel">
+              <div className="contacts-heading">
+                <div>
+                  <h2>Your contacts</h2>
+                  <p className="muted">
+                    {filteredContacts.length} contact
+                    {filteredContacts.length === 1 ? "" : "s"} found
+                  </p>
+                </div>
+              </div>
+
+              <input
+                className="search-input"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name, email, phone..."
+                aria-label="Search contacts"
+              />
+
+              {filteredContacts.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-icon">◎</div>
+                  <h3>
+                    {contacts.length === 0
+                      ? "No contacts yet"
+                      : "No matching contacts"}
+                  </h3>
+                  <p className="muted">
+                    {contacts.length === 0
+                      ? "Add your first contact using the form."
+                      : "Try another search term."}
+                  </p>
+                </div>
+              ) : (
+                <div className="contact-list">
+                  {filteredContacts.map((contact) => (
+                    <article className="contact-card" key={contact.id}>
+                      <div className="avatar">
+                        {contact.name.charAt(0).toUpperCase()}
+                      </div>
+
+                      <div className="contact-details">
+                        <h3>{contact.name}</h3>
+                        {contact.email && <p>{contact.email}</p>}
+                        <p>{contact.phone}</p>
+                        {contact.address && (
+                          <p className="muted">{contact.address}</p>
+                        )}
+                        {contact.notes && (
+                          <p className="contact-notes">{contact.notes}</p>
+                        )}
+                      </div>
+
+                      <button
+                        className="button button-delete"
+                        onClick={() => deleteContact(contact.id)}
+                        aria-label={`Delete ${contact.name}`}
+                      >
+                        Delete
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+
+          <p className="footer-note">
+            ContactHub · Your contacts, organized.
+          </p>
+        </section>
+      </main>
     );
   }
 
   return (
-    <div className="app-layout">
-      <Sidebar
-        user={user}
-        contacts={contacts}
-        activeCategory={activeCategory}
-        onSelectCategory={(catId) => {
-          setActiveCategory(catId);
-          setSelectedIds([]);
-        }}
-        onOpenAddModal={() => {
-          setActiveContact(null);
-          setModalType("add");
-        }}
-        onOpenBackupModal={() => setModalType("backup")}
-        onLogout={handleLogout}
-        theme={theme}
-        onToggleTheme={handleToggleTheme}
-      />
+    <main className="auth-shell">
+      <section className="auth-intro">
+        <a className="brand brand-light" href="#home">
+          <span className="brand-icon">C</span>
+          ContactHub
+        </a>
 
-      <main className="dashboard-main">
-        <Navbar
-          searchTerm={searchTerm}
-          onSearchChange={setSearchTerm}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          sortBy={sortBy}
-          onSortByChange={setSortBy}
-          onOpenAddModal={() => {
-            setActiveContact(null);
-            setModalType("add");
-          }}
-          theme={theme}
-          onToggleTheme={handleToggleTheme}
-        />
+        <div className="intro-content">
+          <p className="eyebrow">EVERY CONNECTION MATTERS</p>
+          <h1>Your contacts.<br />One simple hub.</h1>
+          <p>
+            Organize your people, keep important details close, and make every
+            connection easier to manage.
+          </p>
 
-        {/* Welcome & Stats */}
-        <div className="dashboard-content">
-          <section className="welcome-banner">
-            <div>
-              <p className="eyebrow">CONTACTHUB • ALL-IN-ONE JAVASCRIPT APP</p>
-              <h2>Stay connected, {user.name}.</h2>
-              <p>
-                Manage your network seamlessly with instant offline local storage. No external servers or database setup required.
-              </p>
-            </div>
-            <div className="banner-icon">
-              <SparklesIcon size={38} />
-            </div>
-          </section>
-
-          <StatsCards contacts={contacts} />
-
-          {/* Section Toolbar / Heading */}
-          <section className="contacts-section">
-            <div className="section-heading">
-              <div className="section-title-wrap">
-                <h2>
-                  {activeCategory === "all"
-                    ? "All Contacts"
-                    : activeCategory === "favorites"
-                    ? "Starred Favorites"
-                    : `${activeCategory} Contacts`}
-                </h2>
-                <p className="muted">
-                  Showing {filteredContacts.length} of {contacts.length} total contacts
-                </p>
-              </div>
-
-              <div className="section-heading-actions">
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={() => setModalType("backup")}
-                >
-                  <DownloadIcon size={14} />
-                  <span>Import / Export</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => {
-                    setActiveContact(null);
-                    setModalType("add");
-                  }}
-                >
-                  <PlusIcon size={14} />
-                  <span>New Contact</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Batch actions bar when items are selected */}
-            {selectedIds.length > 0 && (
-              <div className="batch-actions-bar">
-                <div className="batch-info">
-                  <span className="batch-badge">{selectedIds.length}</span>
-                  <span>Contact(s) Selected</span>
-                </div>
-                <div className="batch-buttons">
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-sm"
-                    onClick={handleExportSelectedCSV}
-                  >
-                    <DownloadIcon size={13} />
-                    <span>Export Selected</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    onClick={handleBatchDelete}
-                  >
-                    <TrashIcon size={13} />
-                    <span>Delete Selected ({selectedIds.length})</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-text-sm"
-                    onClick={() => setSelectedIds([])}
-                  >
-                    Clear Selection
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Contact list or empty state */}
-            {filteredContacts.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-icon">⌕</div>
-                <h3>
-                  {searchTerm
-                    ? `No contacts match "${searchTerm}"`
-                    : activeCategory === "favorites"
-                    ? "No starred contacts yet"
-                    : "No contacts in this category"}
-                </h3>
-                <p>
-                  {searchTerm
-                    ? "Try adjusting your search terms or clearing filters."
-                    : "Click below to add a new contact or import from a file."}
-                </p>
-                <div className="empty-state-buttons">
-                  {searchTerm && (
-                    <button
-                      type="button"
-                      className="btn btn-outline"
-                      onClick={() => setSearchTerm("")}
-                    >
-                      Clear Search
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => {
-                      setActiveContact(null);
-                      setModalType("add");
-                    }}
-                  >
-                    <PlusIcon size={14} />
-                    <span>Add New Contact</span>
-                  </button>
-                </div>
-              </div>
-            ) : viewMode === "grid" ? (
-              <div className="contacts-grid">
-                {filteredContacts.map((contact) => (
-                  <ContactCard
-                    key={contact.id}
-                    contact={contact}
-                    onEdit={(c) => {
-                      setActiveContact(c);
-                      setModalType("edit");
-                    }}
-                    onDelete={handleDeleteContact}
-                    onToggleFavorite={handleToggleFavorite}
-                    onSelectDetails={(c) => {
-                      setActiveContact(c);
-                      setModalType("detail");
-                    }}
-                  />
-                ))}
-              </div>
-            ) : (
-              <ContactTable
-                contacts={filteredContacts}
-                selectedIds={selectedIds}
-                onToggleSelect={handleToggleSelect}
-                onSelectAll={handleSelectAll}
-                onEdit={(c) => {
-                  setActiveContact(c);
-                  setModalType("edit");
-                }}
-                onDelete={handleDeleteContact}
-                onToggleFavorite={handleToggleFavorite}
-                onSelectDetails={(c) => {
-                  setActiveContact(c);
-                  setModalType("detail");
-                }}
-              />
-            )}
-          </section>
+          <div className="feature-list">
+            <div><span>✓</span> Simple contact organization</div>
+            <div><span>✓</span> Quick contact search</div>
+            <div><span>✓</span> Easy account access</div>
+          </div>
         </div>
 
-        <footer className="dashboard-footer">
-          ContactHub • High-performance JavaScript Address Book with Offline Local Storage
-        </footer>
-      </main>
+        <p className="intro-footer">ContactHub · Stay connected.</p>
+      </section>
 
-      {/* Modals */}
-      <ContactModal
-        isOpen={modalType === "add" || modalType === "edit"}
-        initialData={activeContact}
-        onSave={handleSaveContact}
-        onClose={() => {
-          setModalType(null);
-          setActiveContact(null);
-        }}
-      />
+      <section className="auth-side">
+        <div className="auth-card">
+          <div className="mobile-brand">
+            <span className="brand-icon">C</span> ContactHub
+          </div>
 
-      <ContactDetailModal
-        contact={activeContact}
-        onClose={() => {
-          setActiveContact(null);
-          if (modalType === "detail") setModalType(null);
-        }}
-        onEdit={(c) => {
-          setActiveContact(c);
-          setModalType("edit");
-        }}
-        onDelete={handleDeleteContact}
-        onToggleFavorite={handleToggleFavorite}
-      />
+          <p className="eyebrow">
+            {mode === "login" ? "WELCOME BACK" : "GET STARTED"}
+          </p>
 
-      <ImportExportModal
-        isOpen={modalType === "backup"}
-        onClose={() => setModalType(null)}
-        ownerEmail={user.email}
-        contactsCount={contacts.length}
-        onContactsImported={handleContactsImported}
-        onResetSample={handleResetSampleContacts}
-      />
+          <h2>
+            {mode === "login" ? "Sign in to ContactHub" : "Create your account"}
+          </h2>
 
-      {/* Floating Toast Notification */}
-      <Toast
-        toast={toast}
-        onClose={() => setToast(null)}
-        onUndo={handleUndoAction}
-      />
-    </div>
+          <p className="muted">
+            {mode === "login"
+              ? "Enter your details to continue."
+              : "Fill in your details to get started."}
+          </p>
+
+          {message && (
+            <div className="notice" role="alert">
+              {message}
+            </div>
+          )}
+
+          <form className="auth-form" onSubmit={submitAuth}>
+            {mode === "register" && (
+              <label>
+                Full name
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Enter your full name"
+                  autoComplete="name"
+                  required
+                />
+              </label>
+            )}
+
+            <label>
+              Email address
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+                required
+              />
+            </label>
+
+            <label>
+              Password
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter your password"
+                autoComplete={
+                  mode === "login" ? "current-password" : "new-password"
+                }
+                minLength={mode === "register" ? 6 : undefined}
+                required
+              />
+            </label>
+
+            <button
+              className="button button-primary auth-submit"
+              type="submit"
+              disabled={busy}
+            >
+              {busy
+                ? "Please wait..."
+                : mode === "login"
+                  ? "Sign in"
+                  : "Create account"}
+            </button>
+          </form>
+
+          <p className="auth-switch">
+            {mode === "login"
+              ? "Don't have an account?"
+              : "Already have an account?"}{" "}
+            <button
+              className="text-button"
+              onClick={() => {
+                setMode(mode === "login" ? "register" : "login");
+                setMessage("");
+              }}
+            >
+              {mode === "login" ? "Create account" : "Sign in"}
+            </button>
+          </p>
+        </div>
+      </section>
+    </main>
   );
 }
+```
